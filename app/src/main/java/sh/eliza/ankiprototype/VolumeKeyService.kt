@@ -23,16 +23,15 @@ class VolumeKeyService : Service() {
     powerManager = getSystemService(POWER_SERVICE) as PowerManager
     volumeKeyHelper = VolumeKeyHelper(this) { Log.i(TAG, "event: $it") }
 
-    val channel =
-      NotificationChannel(
-        CHANNEL_ID,
-        getString(R.string.app_name),
-        NotificationManager.IMPORTANCE_MIN
-      )
-
     val notificationManager =
       getSystemService(NotificationManager::class.java) as NotificationManager
-    notificationManager.createNotificationChannel(channel)
+    notificationManager.createNotificationChannel(
+      NotificationChannel(
+        CHANNEL_ID,
+        getString(R.string.service_notification_channel),
+        NotificationManager.IMPORTANCE_LOW
+      )
+    )
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -40,8 +39,12 @@ class VolumeKeyService : Service() {
 
     startForeground(
       R.string.app_name,
-      Notification.Builder(this, CHANNEL_ID).setSmallIcon(R.drawable.ic_launcher_background).build()
+      Notification.Builder(this, CHANNEL_ID).run {
+        setSmallIcon(R.drawable.ic_launcher_background)
+        build()
+      }
     )
+
     if (wakeLock === null) {
       wakeLock =
         powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ankiprototype:MainActivity")

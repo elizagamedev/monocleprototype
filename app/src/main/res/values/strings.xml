@@ -1,3 +1,4 @@
 <resources>
   <string name="app_name">Ankiprototype</string>
+  <string name="service_notification_channel">Service</string>
 </resources>
