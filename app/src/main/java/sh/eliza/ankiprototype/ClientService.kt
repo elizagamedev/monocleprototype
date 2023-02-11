@@ -8,10 +8,10 @@ import android.content.Intent
 import android.os.PowerManager
 import android.util.Log
 
-private const val TAG = "VolumeKeyService"
-private const val CHANNEL_ID = "ankiprototype:VolumeKeyService"
+private const val TAG = "ClientService"
+private const val CHANNEL_ID = "ankiprototype:ClientService"
 
-class VolumeKeyService : Service() {
+class ClientService : Service() {
   private lateinit var powerManager: PowerManager
   private lateinit var volumeKeyHelper: VolumeKeyHelper
 
