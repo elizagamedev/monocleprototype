@@ -12,7 +12,7 @@
         android:layout_height="wrap_content"
         android:text="@string/server_mac_address" />
     <EditText
-        android:id="@+id/mac_address"
+        android:id="@+id/server_mac_address"
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
   </LinearLayout>
