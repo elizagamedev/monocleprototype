@@ -25,8 +25,9 @@ import sh.eliza.ankiprototype.Constants.SERVICE_UUID
 private const val TAG = "ServerHelper"
 
 class ServerHelper(private val context: Context) : AutoCloseable {
+  private val bluetoothManager =
+    context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
 
-  val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
   private var bluetoothGattServer: BluetoothGattServer? = null
   private var connectedDevice: BluetoothDevice? = null
 

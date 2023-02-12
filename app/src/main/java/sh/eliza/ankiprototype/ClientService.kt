@@ -14,6 +14,7 @@ private const val CHANNEL_ID = "ankiprototype:ClientService"
 class ClientService : Service() {
   private lateinit var powerManager: PowerManager
   private lateinit var volumeKeyHelper: VolumeKeyHelper
+  private lateinit var clientHelper: ClientHelper
 
   private var wakeLock: PowerManager.WakeLock? = null
 
@@ -22,6 +23,7 @@ class ClientService : Service() {
 
     powerManager = getSystemService(POWER_SERVICE) as PowerManager
     volumeKeyHelper = VolumeKeyHelper(this) { Log.i(TAG, "event: $it") }
+    clientHelper = ClientHelper(this)
 
     val notificationManager =
       getSystemService(NotificationManager::class.java) as NotificationManager
@@ -58,6 +60,7 @@ class ClientService : Service() {
 
   override fun onDestroy() {
     volumeKeyHelper.close()
+    clientHelper.close()
     wakeLock?.release()
     wakeLock = null
     super.onDestroy()

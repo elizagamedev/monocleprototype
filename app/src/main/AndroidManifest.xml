@@ -2,13 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools">
 
+  <!-- Client service which runs when the screen is off. -->
   <uses-permission android:name="android.permission.WAKE_LOCK" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-  <!-- Server -->
+  <!-- BLE Server -->
   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
   <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
   <uses-permission android:name="android.permission.BLUETOOTH" />
+  <!-- BLE Client -->
+  <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+                   android:usesPermissionFlags="neverForLocation" />
 
   <application
       android:allowBackup="true"
@@ -19,6 +23,7 @@
       android:supportsRtl="true"
       android:theme="@style/Theme.AppCompat.Light"
       tools:targetApi="33">
+
     <activity
         android:name=".MainActivity"
         android:exported="true">
