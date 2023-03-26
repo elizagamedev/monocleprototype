@@ -5,25 +5,39 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import sh.eliza.ankiprototype.Constants.SERVER_MAC_ADDRESS_KEY
 
 private const val TAG = "ClientService"
 private const val CHANNEL_ID = "ankiprototype:ClientService"
 
 class ClientService : Service() {
+  private val handler = Handler(Looper.getMainLooper())
+
   private lateinit var powerManager: PowerManager
   private lateinit var volumeKeyHelper: VolumeKeyHelper
-  private lateinit var clientHelper: ClientHelper
 
   private var wakeLock: PowerManager.WakeLock? = null
+  private var clientHelper: ClientHelper? = null
 
   override fun onCreate() {
     super.onCreate()
 
     powerManager = getSystemService(POWER_SERVICE) as PowerManager
-    volumeKeyHelper = VolumeKeyHelper(this) { Log.i(TAG, "event: $it") }
-    clientHelper = ClientHelper(this)
+    volumeKeyHelper =
+      VolumeKeyHelper(this) {
+        clientHelper?.write(
+          "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do ei".toByteArray(),
+          handler,
+          object : ClientHelper.WriteCallback {
+            override fun onWriteResult() {}
+            override fun onWriteFailed() {}
+          }
+        )
+      }
 
     val notificationManager =
       getSystemService(NotificationManager::class.java) as NotificationManager
@@ -53,6 +67,14 @@ class ClientService : Service() {
           .apply { acquire() }
     }
 
+    val serverMacAddress = intent?.extras?.getString(SERVER_MAC_ADDRESS_KEY) ?: ""
+
+    if (clientHelper?.serverMacAddress != serverMacAddress) {
+      clientHelper?.close()
+      Log.i(TAG, "Starting service for server device name `$serverMacAddress'")
+      clientHelper = ClientHelper(this, serverMacAddress)
+    }
+
     return START_STICKY
   }
 
@@ -60,9 +82,8 @@ class ClientService : Service() {
 
   override fun onDestroy() {
     volumeKeyHelper.close()
-    clientHelper.close()
+    clientHelper?.close()
     wakeLock?.release()
-    wakeLock = null
     super.onDestroy()
   }
 }

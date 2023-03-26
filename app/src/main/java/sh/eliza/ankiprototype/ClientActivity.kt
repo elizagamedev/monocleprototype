@@ -1,29 +1,33 @@
 package sh.eliza.ankiprototype
 
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Bundle
 import android.os.PowerManager
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
 import android.widget.EditText
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import sh.eliza.ankiprototype.Constants.SERVER_MAC_ADDRESS_KEY
 
 private const val TAG = "ClientActivity"
 
 class ClientActivity : AppCompatActivity() {
   private lateinit var powerManager: PowerManager
+  private lateinit var preferences: SharedPreferences
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.client_activity)
 
     powerManager = getSystemService(POWER_SERVICE) as PowerManager
+    preferences = getPreferences(MODE_PRIVATE)
 
-    val preferences = getPreferences(MODE_PRIVATE)
-
-    findViewById<EditText>(R.id.server_mac_address)
-      .addTextChangedListener(
+    findViewById<EditText>(R.id.server_mac_address).run {
+      setText(preferences.serverMacAddress, TextView.BufferType.EDITABLE)
+      addTextChangedListener(
         object : TextWatcher {
           override fun afterTextChanged(s: Editable) {}
           override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) {}
@@ -32,19 +36,36 @@ class ClientActivity : AppCompatActivity() {
           }
         }
       )
+    }
   }
 
   override fun onResume() {
     super.onResume()
-    Log.i(TAG, "onResume")
-    stopService(Intent(this, ClientService::class.java))
+    stopClientService()
   }
 
   override fun onPause() {
     if (!powerManager.isInteractive()) {
-      Log.i(TAG, "onPause, screen off: starting service")
-      startForegroundService(Intent(this, ClientService::class.java))
+      startClientService()
     }
     super.onPause()
+  }
+
+  private fun startClientService() {
+    if (hasBluetoothSupport()) {
+      Log.i(TAG, "Starting client service...")
+      startForegroundService(
+        Intent(this, ClientService::class.java).apply {
+          putExtra(SERVER_MAC_ADDRESS_KEY, preferences.serverMacAddress)
+        }
+      )
+    } else {
+      Log.i(TAG, "Cannot start service due to lack of BLE support.")
+    }
+  }
+
+  private fun stopClientService() {
+    Log.i(TAG, "Stopping client service...")
+    stopService(Intent(this, ClientService::class.java))
   }
 }

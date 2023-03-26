@@ -41,6 +41,15 @@ class MainActivity : AppCompatActivity() {
       }
     }
 
+  private val enableScanPermission =
+    registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+      if (isGranted) {
+        enableAdvertisePermission.launch(Manifest.permission.BLUETOOTH_ADVERTISE)
+      } else {
+        updateReadinessText()
+      }
+    }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.main_activity)
@@ -58,9 +67,7 @@ class MainActivity : AppCompatActivity() {
 
     enablePermissionsButton =
       findViewById<Button>(R.id.enable_permissions).apply {
-        setOnClickListener {
-          enableAdvertisePermission.launch(Manifest.permission.BLUETOOTH_ADVERTISE)
-        }
+        setOnClickListener { enableScanPermission.launch(Manifest.permission.BLUETOOTH_SCAN) }
       }
 
     updateReadinessText()

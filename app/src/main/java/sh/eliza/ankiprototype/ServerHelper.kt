@@ -4,6 +4,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothGattServerCallback
 import android.bluetooth.BluetoothGattService
@@ -16,17 +17,26 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
+import android.os.Handler
 import android.os.ParcelUuid
 import android.util.Log
+import java.io.ByteArrayOutputStream
 import sh.eliza.ankiprototype.Constants.SERVICE_RX_CHARACTERISTIC_UUID
 import sh.eliza.ankiprototype.Constants.SERVICE_UUID
 
 private const val TAG = "ServerHelper"
 
-class ServerHelper(private val context: Context) : AutoCloseable {
+class ServerHelper(
+  private val context: Context,
+  private val callbackHandler: Handler,
+  private val onReceive: (ByteArray) -> Unit
+) : AutoCloseable {
   private val bluetoothManager =
     context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+  private val bluetoothAdapter = bluetoothManager.adapter
+  private val bluetoothLeAdvertiser = bluetoothAdapter.bluetoothLeAdvertiser
+
+  private val rxBuffer = ByteArrayOutputStream()
 
   private var bluetoothGattServer: BluetoothGattServer? = null
   private var connectedDevice: BluetoothDevice? = null
@@ -64,11 +74,11 @@ class ServerHelper(private val context: Context) : AutoCloseable {
   private val advertiseCallback =
     object : AdvertiseCallback() {
       override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-        Log.i(TAG, "LE Advertise Started.")
+        Log.i(TAG, "Advertising started.")
       }
 
       override fun onStartFailure(errorCode: Int) {
-        Log.w(TAG, "LE Advertise Failed: $errorCode")
+        Log.w(TAG, "Advertising failed. errorCode=$errorCode")
       }
     }
 
@@ -79,15 +89,60 @@ class ServerHelper(private val context: Context) : AutoCloseable {
   private val gattServerCallback =
     object : BluetoothGattServerCallback() {
       override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-        if (newState == BluetoothProfile.STATE_CONNECTED) {
-          Log.i(TAG, "BluetoothDevice CONNECTED: $device")
-          connectedDevice?.let { bluetoothGattServer?.cancelConnection(device) }
-          connectedDevice = device
-        } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-          Log.i(TAG, "BluetoothDevice DISCONNECTED: $device")
-          if (device == connectedDevice) {
-            connectedDevice = null
+        try {
+          when (newState) {
+            BluetoothProfile.STATE_CONNECTED -> {
+              Log.i(TAG, "Connected. device=$device")
+              connectedDevice?.let { bluetoothGattServer?.cancelConnection(device) }
+              connectedDevice = device
+              rxBuffer.reset()
+              stopAdvertising()
+            }
+            BluetoothProfile.STATE_DISCONNECTED -> {
+              Log.i(TAG, "Disconnected. device=$device")
+              if (device == connectedDevice) {
+                connectedDevice = null
+                rxBuffer.reset()
+                startAdvertising()
+              }
+            }
           }
+        } catch (t: Throwable) {
+          Log.e(TAG, "Unhandled exception during `onConnectionStateChange'", t)
+          stopAdvertising()
+          stopServer()
+        }
+      }
+
+      override fun onCharacteristicReadRequest(
+        device: BluetoothDevice,
+        requestId: Int,
+        offset: Int,
+        characteristic: BluetoothGattCharacteristic
+      ) {
+        try {
+          Log.w(TAG, "Unknown characteristic read request.")
+          bluetoothGattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+        } catch (t: Throwable) {
+          Log.e(TAG, "Unhandled exception during `onCharacteristicReadRequest'", t)
+          stopAdvertising()
+          stopServer()
+        }
+      }
+
+      override fun onDescriptorReadRequest(
+        device: BluetoothDevice,
+        requestId: Int,
+        offset: Int,
+        characteristic: BluetoothGattDescriptor
+      ) {
+        try {
+          Log.w(TAG, "Unknown descriptor read request.")
+          bluetoothGattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+        } catch (t: Throwable) {
+          Log.e(TAG, "Unhandled exception during `onDescriptorReadRequest'", t)
+          stopAdvertising()
+          stopServer()
         }
       }
 
@@ -100,50 +155,106 @@ class ServerHelper(private val context: Context) : AutoCloseable {
         offset: Int,
         value: ByteArray
       ) {
-        when (characteristic.uuid) {
-          SERVICE_RX_CHARACTERISTIC_UUID -> {
-            if (responseNeeded) {
-              bluetoothGattServer?.sendResponse(
-                device,
-                requestId,
-                BluetoothGatt.GATT_SUCCESS,
-                0,
-                null
-              )
+        try {
+          when (characteristic.uuid) {
+            SERVICE_RX_CHARACTERISTIC_UUID -> {
+              if (preparedWrite) {
+                Log.i(TAG, "Prepared protocol write request.")
+                if (offset != rxBuffer.size()) {
+                  Log.w(TAG, "offset ($offset) != size (${rxBuffer.size()})")
+                }
+                rxBuffer.write(value)
+              } else {
+                Log.i(TAG, "Protocol write request.")
+                callbackHandler.post { onReceive(value) }
+              }
+              if (responseNeeded) {
+                bluetoothGattServer?.sendResponse(
+                  device,
+                  requestId,
+                  BluetoothGatt.GATT_SUCCESS,
+                  0,
+                  value
+                )
+              }
+            }
+            else -> {
+              Log.w(TAG, "Unknown characteristic write request.")
+              if (responseNeeded) {
+                bluetoothGattServer?.sendResponse(
+                  device,
+                  requestId,
+                  BluetoothGatt.GATT_FAILURE,
+                  0,
+                  null
+                )
+              }
             }
           }
-          else -> {
-            Log.w(TAG, "Unknown descriptor write request")
-            if (responseNeeded) {
-              bluetoothGattServer?.sendResponse(
-                device,
-                requestId,
-                BluetoothGatt.GATT_FAILURE,
-                0,
-                null
-              )
-            }
+        } catch (t: Throwable) {
+          Log.e(TAG, "Unhandled exception during `onCharacteristicWriteRequest'", t)
+          stopAdvertising()
+          stopServer()
+        }
+      }
+
+      override fun onDescriptorWriteRequest(
+        device: BluetoothDevice,
+        requestId: Int,
+        descriptor: BluetoothGattDescriptor,
+        preparedWrite: Boolean,
+        responseNeeded: Boolean,
+        offset: Int,
+        value: ByteArray
+      ) {
+        try {
+          Log.w(TAG, "Unknown descriptor write request.")
+          if (responseNeeded) {
+            bluetoothGattServer?.sendResponse(
+              device,
+              requestId,
+              BluetoothGatt.GATT_FAILURE,
+              0,
+              null
+            )
           }
+        } catch (t: Throwable) {
+          Log.e(TAG, "Unhandled exception during `onDescriptorWriteRequest'", t)
+          stopAdvertising()
+          stopServer()
+        }
+      }
+
+      override fun onExecuteWrite(device: BluetoothDevice, requestId: Int, execute: Boolean) {
+        try {
+          if (execute) {
+            Log.i(TAG, "Executing write.")
+            callbackHandler.post { onReceive(rxBuffer.toByteArray()) }
+          } else {
+            Log.i(TAG, "Canceling write.")
+          }
+          rxBuffer.reset()
+          bluetoothGattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+        } catch (t: Throwable) {
+          Log.e(TAG, "Unhandled exception during `onExecuteWrite'", t)
+          stopAdvertising()
+          stopServer()
         }
       }
     }
 
   init {
-    val bluetoothAdapter = bluetoothManager.adapter
-    // We can't continue without proper Bluetooth support
-    checkBluetoothSupport(context, bluetoothAdapter)
-
-    // Register for system Bluetooth events
+    check(context.hasBluetoothSupport())
     context.registerReceiver(bluetoothReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+
     if (bluetoothAdapter.isEnabled) {
-      Log.d(TAG, "Bluetooth enabled...starting services")
       startAdvertising()
       startServer()
     }
   }
 
   override fun close() {
-    if (bluetoothManager.adapter.isEnabled) {
+    if (bluetoothAdapter.isEnabled) {
       stopServer()
       stopAdvertising()
     }
@@ -156,55 +267,46 @@ class ServerHelper(private val context: Context) : AutoCloseable {
    * Service.
    */
   private fun startAdvertising() {
-    bluetoothManager.adapter.bluetoothLeAdvertiser?.let {
-      it.startAdvertising(
-        AdvertiseSettings.Builder().run {
-          setConnectable(true)
-          setTimeout(0)
-          build()
-        },
-        AdvertiseData.Builder().run {
-          setIncludeDeviceName(true)
-          addServiceUuid(ParcelUuid(SERVICE_UUID))
-          build()
-        },
-        advertiseCallback
-      )
-    }
-      ?: Log.w(TAG, "Failed to create advertiser")
+    Log.i(TAG, "Starting advertising...")
+    bluetoothLeAdvertiser.startAdvertising(
+      AdvertiseSettings.Builder().run {
+        setConnectable(true)
+        setTimeout(0)
+        build()
+      },
+      AdvertiseData.Builder().run {
+        addServiceUuid(ParcelUuid(SERVICE_UUID))
+        setIncludeTxPowerLevel(true)
+        build()
+      },
+      AdvertiseData.Builder().run {
+        setIncludeDeviceName(true)
+        setIncludeTxPowerLevel(true)
+        build()
+      },
+      advertiseCallback
+    )
   }
 
   /** Stop Bluetooth advertisements. */
   private fun stopAdvertising() {
-    bluetoothManager.adapter.bluetoothLeAdvertiser?.let { it.stopAdvertising(advertiseCallback) }
-      ?: Log.w(TAG, "Failed to create advertiser")
+    Log.i(TAG, "Stopping advertising...")
+    bluetoothLeAdvertiser.stopAdvertising(advertiseCallback)
   }
 
   /** Initialize the GATT server instance with the services/characteristics. */
   private fun startServer() {
+    Log.i(TAG, "Starting server...")
     bluetoothGattServer = bluetoothManager.openGattServer(context, gattServerCallback)
 
-    bluetoothGattServer?.addService(service) ?: Log.w(TAG, "Unable to create GATT server")
+    bluetoothGattServer?.addService(service) ?: Log.w(TAG, "Unable to create GATT server.")
   }
 
   /** Shut down the GATT server. */
   private fun stopServer() {
+    Log.i(TAG, "Stopping server...")
     bluetoothGattServer?.close()
     bluetoothGattServer = null
-  }
-}
-
-/**
- * Verify the level of Bluetooth support provided by the hardware.
- * @param bluetoothAdapter System [BluetoothAdapter].
- * @return true if Bluetooth is properly supported, false otherwise.
- */
-private fun checkBluetoothSupport(context: Context, bluetoothAdapter: BluetoothAdapter?) {
-  if (bluetoothAdapter == null) {
-    throw RuntimeException("Bluetooth is not supported")
-  }
-
-  if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
-    throw RuntimeException("Bluetooth LE is not supported")
+    rxBuffer.reset()
   }
 }

@@ -2,18 +2,20 @@
   <string name="app_name">Ankiprototype</string>
   <string name="service_notification_channel">Service</string>
   <string name="server_instructions_running">
-    Server will run as long as Bluetooth is enabled. Images sent by the client
-    will appear below.
+    Make sure that the client device is paired with this one.\n\nServer will run
+    as long as Bluetooth is enabled. Images sent by the client will appear
+    below.
   </string>
   <string name="server_instructions_not_running">
-    App has insufficient permissions to start server.
+    App has insufficient permissions to start server or does not support BLE.
   </string>
 
   <string name="enable_permissions">Enable Permissions &amp; Bluetooth</string>
-  <string name="server_mac_address">Server MAC Address</string>
+  <string name="server_mac_address">Server MAC address (if blank, matches anything)</string>
   <string name="client_instructions">
-    Turn off your screen and use the volume up and down keys to send images to
-    the server.
+    If connecting to another Android device, make sure the two are
+    paired.\n\nTurn off your screen and use the volume up and down keys to send
+    images to the server.
   </string>
 
   <string name="all_permissions_granted">All systems ready!</string>
