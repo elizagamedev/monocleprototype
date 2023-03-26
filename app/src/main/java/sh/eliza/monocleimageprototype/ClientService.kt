@@ -1,4 +1,4 @@
-package sh.eliza.ankiprototype
+package sh.eliza.monocleimageprototype
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -9,10 +9,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
-import sh.eliza.ankiprototype.Constants.SERVER_MAC_ADDRESS_KEY
+import sh.eliza.monocleimageprototype.Constants.SERVER_MAC_ADDRESS_KEY
 
 private const val TAG = "ClientService"
-private const val CHANNEL_ID = "ankiprototype:ClientService"
+private const val CHANNEL_ID = "monocleimageprototype:ClientService"
 
 class ClientService : Service() {
   private val handler = Handler(Looper.getMainLooper())
@@ -63,7 +63,10 @@ class ClientService : Service() {
 
     if (wakeLock === null) {
       wakeLock =
-        powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ankiprototype:MainActivity")
+        powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "monocleimageprototype:MainActivity"
+          )
           .apply { acquire() }
     }
 

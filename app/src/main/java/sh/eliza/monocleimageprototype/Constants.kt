@@ -1,4 +1,4 @@
-package sh.eliza.ankiprototype
+package sh.eliza.monocleimageprototype
 
 import java.util.UUID
 

@@ -4,16 +4,16 @@ plugins {
 }
 
 android {
-  namespace = "sh.eliza.ankiprototype"
+  namespace = "sh.eliza.monocleimageprototype"
   compileSdk = 33
   buildToolsVersion = "33.0.0"
 
   defaultConfig {
-    applicationId = "sh.eliza.ankiprototype"
+    applicationId = "sh.eliza.monocleimageprototype"
     minSdk = 26
     targetSdk = 33
-    versionCode = 2
-    versionName = "0.2.0"
+    versionCode = 1
+    versionName = "0.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

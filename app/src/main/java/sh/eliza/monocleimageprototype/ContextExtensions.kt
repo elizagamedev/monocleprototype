@@ -1,4 +1,4 @@
-package sh.eliza.ankiprototype
+package sh.eliza.monocleimageprototype
 
 import android.Manifest
 import android.content.Context

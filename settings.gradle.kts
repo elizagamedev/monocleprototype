@@ -14,6 +14,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "ankiprototype"
+rootProject.name = "monocleimageprototype"
 
 include(":app")

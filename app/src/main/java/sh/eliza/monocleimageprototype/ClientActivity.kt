@@ -1,4 +1,4 @@
-package sh.eliza.ankiprototype
+package sh.eliza.monocleimageprototype
 
 import android.content.Intent
 import android.content.SharedPreferences
@@ -10,7 +10,7 @@ import android.util.Log
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import sh.eliza.ankiprototype.Constants.SERVER_MAC_ADDRESS_KEY
+import sh.eliza.monocleimageprototype.Constants.SERVER_MAC_ADDRESS_KEY
 
 private const val TAG = "ClientActivity"
 

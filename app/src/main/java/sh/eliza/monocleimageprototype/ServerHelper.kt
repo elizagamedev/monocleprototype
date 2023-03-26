@@ -1,4 +1,4 @@
-package sh.eliza.ankiprototype
+package sh.eliza.monocleimageprototype
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -21,8 +21,8 @@ import android.os.Handler
 import android.os.ParcelUuid
 import android.util.Log
 import java.io.ByteArrayOutputStream
-import sh.eliza.ankiprototype.Constants.SERVICE_RX_CHARACTERISTIC_UUID
-import sh.eliza.ankiprototype.Constants.SERVICE_UUID
+import sh.eliza.monocleimageprototype.Constants.SERVICE_RX_CHARACTERISTIC_UUID
+import sh.eliza.monocleimageprototype.Constants.SERVICE_UUID
 
 private const val TAG = "ServerHelper"
 

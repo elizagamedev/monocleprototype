@@ -1,4 +1,4 @@
-package sh.eliza.ankiprototype
+package sh.eliza.monocleimageprototype
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -17,6 +17,6 @@ class ExampleInstrumentedTest {
   fun useAppContext() {
     // Context of the app under test.
     val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-    assertEquals("sh.eliza.ankiprototype", appContext.packageName)
+    assertEquals("sh.eliza.monocleimageprototype", appContext.packageName)
   }
 }

@@ -1,7 +1,7 @@
 # This flake is based on the lovely example here:
 # https://github.com/fcitx5-android/fcitx5-android/blob/master/flake.nix
 {
-  description = "Dev shell flake for ankiprototype";
+  description = "Dev shell flake for monocleimageprototype";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   inputs.flake-compat = {
@@ -19,7 +19,7 @@
       };
     in
     with pkgs;
-    with ankiprototype-android-sdk;
+    with monocleimageprototype-android-sdk;
     {
       devShells.x86_64-linux.default = mkShell {
         buildInputs = [
@@ -38,7 +38,7 @@
       };
     } // {
       overlays.default = final: prev: {
-        ankiprototype-android-sdk = rec {
+        monocleimageprototype-android-sdk = rec {
           buildToolsVersion = "33.0.0";
           androidComposition = prev.androidenv.composeAndroidPackages {
             platformToolsVersion = "33.0.2";

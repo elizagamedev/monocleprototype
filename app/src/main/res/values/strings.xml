@@ -1,5 +1,5 @@
 <resources>
-  <string name="app_name">Ankiprototype</string>
+  <string name="app_name">Monocle Image Prototype</string>
   <string name="service_notification_channel">Service</string>
   <string name="server_instructions_running">
     Make sure that the client device is paired with this one.\n\nServer will run
