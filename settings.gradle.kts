@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "monocleimageprototype"
 
-include(":app")
+include(":app", ":lib")

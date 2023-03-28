@@ -15,31 +15,68 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Handler
 import android.os.ParcelUuid
 import android.util.Log
 import sh.eliza.monocleimageprototype.Constants.SERVICE_RX_CHARACTERISTIC_UUID
+import sh.eliza.monocleimageprototype.Constants.SERVICE_TX_CHARACTERISTIC_UUID
 import sh.eliza.monocleimageprototype.Constants.SERVICE_UUID
 
 private const val TAG = "ClientHelper"
 
-private class WrappedWriteCallback(
-  private val handler: Handler,
-  private val callback: ClientHelper.WriteCallback
-) {
+private class WrappedWriteCallback(private val callback: ClientHelper.WriteCallback) {
   fun onWriteResult() {
-    handler.post { callback.onWriteResult() }
+    try {
+      callback.onWriteResult()
+    } catch (t: Throwable) {
+      Log.i(TAG, "Unhandled exception in `onWriteResult'.", t)
+    }
   }
 
   fun onWriteFailed() {
-    handler.post { callback.onWriteFailed() }
+    try {
+      callback.onWriteFailed()
+    } catch (t: Throwable) {
+      Log.i(TAG, "Unhandled exception in `onWriteFailed'.", t)
+    }
   }
 }
 
-class ClientHelper(private val context: Context, val serverMacAddress: String) : AutoCloseable {
+private class WrappedReadCallback(private val callback: ClientHelper.ReadCallback) {
+  fun onReadResult(data: ByteArray) {
+    try {
+      callback.onReadResult(data)
+    } catch (t: Throwable) {
+      Log.i(TAG, "Unhandled exception in `onReadResult'.", t)
+    }
+  }
+
+  fun onReadFailed() {
+    try {
+      callback.onReadFailed()
+    } catch (t: Throwable) {
+      Log.i(TAG, "Unhandled exception in `onReadFailed'.", t)
+    }
+  }
+}
+
+private class Characteristics(
+  val rx: BluetoothGattCharacteristic,
+  val tx: BluetoothGattCharacteristic,
+)
+
+class ClientHelper(
+  private val context: Context,
+  val mtu: Int,
+  val serverMacAddress: String,
+) : AutoCloseable {
   interface WriteCallback {
     fun onWriteResult()
     fun onWriteFailed()
+  }
+
+  interface ReadCallback {
+    fun onReadResult(data: ByteArray)
+    fun onReadFailed()
   }
 
   private val bluetoothManager =
@@ -49,9 +86,11 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
 
   private var isStarted = false
   private var server: BluetoothGatt? = null
-  private var rxCharacteristic: BluetoothGattCharacteristic? = null
+  private var characteristics: Characteristics? = null
+  private var isReadyForIo = false
 
   private var writeCallback: WrappedWriteCallback? = null
+  private var readCallback: WrappedReadCallback? = null
 
   private val scanSettings =
     ScanSettings.Builder().run {
@@ -79,13 +118,13 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
               Log.i(TAG, "Connected. address=${gatt.device.address}")
               stopScanning()
               gatt.discoverServices()
-              gatt.requestMtu(517)
             }
             BluetoothProfile.STATE_DISCONNECTED -> {
               Log.i(TAG, "Disconnected. address=${gatt.device.address}")
               gatt.close()
               if (gatt == server) {
                 server = null
+                isReadyForIo = false
                 if (isStarted) {
                   startScanning()
                 }
@@ -93,7 +132,7 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
             }
           }
         } catch (t: Throwable) {
-          Log.w(TAG, "Unhandled exception during `onConnectionStateChange'")
+          Log.w(TAG, "Unhandled exception during `onConnectionStateChange'", t)
           stop()
         }
       }
@@ -104,20 +143,42 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
             Log.w(TAG, "onServicesDiscovered() called for device other than server.")
             return
           }
-          if (status == BluetoothGatt.GATT_SUCCESS) {
-            Log.i(TAG, "Services discovered.")
-            gatt.getService(SERVICE_UUID)?.getCharacteristic(SERVICE_RX_CHARACTERISTIC_UUID)?.let {
-              rxCharacteristic = it
-              Log.i(TAG, "Ready to write!")
-            }
-              ?: Log.w(TAG, "RX service characteristic not found.")
-          } else {
+          if (status != BluetoothGatt.GATT_SUCCESS) {
             Log.w(TAG, "Failed to discover services. status=$status")
+            stop()
+            return
           }
+
+          Log.i(TAG, "Services discovered.")
+          val service = gatt.getService(SERVICE_UUID)
+          if (service === null) {
+            Log.w(TAG, "Failed to get image service.")
+            stop()
+            return
+          }
+
+          val rxCharacteristic = service.getCharacteristic(SERVICE_RX_CHARACTERISTIC_UUID)
+          val txCharacteristic = service.getCharacteristic(SERVICE_TX_CHARACTERISTIC_UUID)
+
+          if (rxCharacteristic === null || txCharacteristic === null) {
+            Log.w(TAG, "Service characteristics not found.")
+            stop()
+            return
+          }
+
+          characteristics = Characteristics(rxCharacteristic, txCharacteristic)
+
+          gatt.requestMtu(mtu + 3)
         } catch (t: Throwable) {
-          Log.w(TAG, "Unhandled exception during `onServicesDiscovered'")
+          Log.w(TAG, "Unhandled exception during `onServicesDiscovered'", t)
           stop()
         }
+      }
+
+      override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+        Log.i(TAG, "ATT MTU changed. mtu=$mtu, status=$status")
+        isReadyForIo = true
+        Log.i(TAG, "Ready for IO!")
       }
 
       override fun onCharacteristicWrite(
@@ -130,29 +191,65 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
             Log.w(TAG, "onCharacteristicWrite() called for device other than server.")
             return
           }
+          val rxCharacteristic = characteristics?.rx
+          if (rxCharacteristic == null) {
+            Log.w(TAG, "onCharacteristicWrite() called, but no rx characteristic found.")
+            return
+          }
           if (characteristic != rxCharacteristic) {
             Log.w(TAG, "onCharacteristicWrite() called for unknown characteristic.")
             return
           }
           writeCallback?.let {
+            writeCallback = null
             if (status == BluetoothGatt.GATT_SUCCESS) {
-              Log.i(TAG, "Write completed.")
               it.onWriteResult()
             } else {
               Log.w(TAG, "Write failed. status=$status")
               it.onWriteFailed()
             }
-            writeCallback = null
           }
             ?: Log.w(TAG, "Write callback not set.")
         } catch (t: Throwable) {
-          Log.w(TAG, "Unhandled exception during `onCharacteristicWrite'")
+          Log.w(TAG, "Unhandled exception during `onCharacteristicWrite'", t)
           stop()
         }
       }
 
-      override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-        Log.i(TAG, "ATT MTU changed. mtu=$mtu, status=$status")
+      override fun onCharacteristicRead(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        value: ByteArray,
+        status: Int
+      ) {
+        try {
+          if (gatt != server) {
+            Log.w(TAG, "onCharacteristicRead() called for device other than server.")
+            return
+          }
+          val txCharacteristic = characteristics?.tx
+          if (txCharacteristic == null) {
+            Log.w(TAG, "onCharacteristicRead() called, but no rx characteristic found.")
+            return
+          }
+          if (characteristic != txCharacteristic) {
+            Log.w(TAG, "onCharacteristicRead() called for unknown characteristic.")
+            return
+          }
+          readCallback?.let {
+            readCallback = null
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+              it.onReadResult(value)
+            } else {
+              Log.w(TAG, "Read failed. status=$status")
+              it.onReadFailed()
+            }
+          }
+            ?: Log.w(TAG, "Read callback not set.")
+        } catch (t: Throwable) {
+          Log.w(TAG, "Unhandled exception during `onCharacteristicRead'", t)
+          stop()
+        }
       }
     }
 
@@ -169,7 +266,7 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
             it.onWriteFailed()
             writeCallback = null
           }
-          rxCharacteristic = null
+          characteristics = null
           server =
             result.device.connectGatt(
               context,
@@ -178,7 +275,7 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
               BluetoothDevice.TRANSPORT_LE
             )
         } catch (t: Throwable) {
-          Log.w(TAG, "Unhandled exception during `onCharacteristicWrite'")
+          Log.w(TAG, "Unhandled exception during `onScanResult'", t)
           stop()
         }
       }
@@ -201,6 +298,7 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
           BluetoothAdapter.STATE_OFF -> {
             Log.i(TAG, "Bluetooth turned off.")
             isStarted = false
+            isReadyForIo = false
             stop()
           }
         }
@@ -219,6 +317,7 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
 
   override fun close() {
     isStarted = false
+    isReadyForIo = false
 
     if (bluetoothAdapter.isEnabled) {
       stop()
@@ -226,39 +325,81 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
     context.unregisterReceiver(bluetoothReceiver)
   }
 
-  fun write(value: ByteArray, handler: Handler, writeCallback: WriteCallback) {
-    server?.let { server ->
-      rxCharacteristic?.let { rxCharacteristic ->
-        val wrappedWriteCallback = WrappedWriteCallback(handler, writeCallback)
-        if (this.writeCallback !== null) {
-          Log.w(TAG, "Previous write still in progress.")
-          wrappedWriteCallback.onWriteFailed()
-          return
-        }
-        if (value.size > 512) {
-          // 512 is the maximum size, even with prepared writes. Pixel 5a's Bluetooth just
-          // straight-up crashes in this case.
-          Log.e(TAG, "Payload size exceeds limit.")
-          wrappedWriteCallback.onWriteFailed()
-          return
-        }
-        Log.i(TAG, "Writing to characteristic...")
-        val result =
-          server.writeCharacteristic(
-            rxCharacteristic,
-            value,
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-          )
-        if (result == BluetoothGatt.GATT_SUCCESS) {
-          this.writeCallback = wrappedWriteCallback
-        } else {
-          Log.i(TAG, "Write failed. code=$result")
-          wrappedWriteCallback.onWriteFailed()
-        }
-      }
-        ?: Log.w(TAG, "Tried to write without server characteristic.")
+  fun write(value: ByteArray, writeType: Int, writeCallback: WriteCallback) {
+    val wrappedWriteCallback = WrappedWriteCallback(writeCallback)
+    if (!isReadyForIo) {
+      Log.w(TAG, "Tried to write before connection was ready.")
+      wrappedWriteCallback.onWriteFailed()
+      return
     }
-      ?: Log.w(TAG, "Tried to write without connection to server.")
+    val server = server
+    if (server === null) {
+      Log.w(TAG, "Tried to write without connection to server.")
+      wrappedWriteCallback.onWriteFailed()
+      return
+    }
+    val rxCharacteristic = characteristics?.rx
+    if (rxCharacteristic === null) {
+      Log.w(TAG, "Tried to write without rx characteristic.")
+      wrappedWriteCallback.onWriteFailed()
+      return
+    }
+    if (this.writeCallback !== null) {
+      Log.w(TAG, "Previous write still in progress.")
+      wrappedWriteCallback.onWriteFailed()
+      return
+    }
+    if (value.size > 512) {
+      // 512 is the maximum size, even with prepared writes. Pixel 5a's Bluetooth just
+      // straight-up crashes in this case.
+      Log.w(TAG, "Payload size exceeds limit.")
+      wrappedWriteCallback.onWriteFailed()
+      return
+    }
+
+    this.writeCallback = wrappedWriteCallback
+    val result = server.writeCharacteristic(rxCharacteristic, value, writeType)
+    if (result != BluetoothGatt.GATT_SUCCESS) {
+      Log.w(TAG, "Write failed. code=$result")
+      this.writeCallback = null
+      wrappedWriteCallback.onWriteFailed()
+      return
+    }
+  }
+
+  fun read(readCallback: ReadCallback) {
+    val wrappedReadCallback = WrappedReadCallback(readCallback)
+    if (!isReadyForIo) {
+      Log.w(TAG, "Tried to read before connection was ready.")
+      wrappedReadCallback.onReadFailed()
+      return
+    }
+    val server = server
+    if (server === null) {
+      Log.w(TAG, "Tried to read without connection to server.")
+      wrappedReadCallback.onReadFailed()
+      return
+    }
+    val txCharacteristic = characteristics?.tx
+    if (txCharacteristic === null) {
+      Log.w(TAG, "Tried to read without tx characteristic.")
+      wrappedReadCallback.onReadFailed()
+      return
+    }
+
+    if (this.readCallback !== null) {
+      Log.w(TAG, "Previous read still in progress.")
+      wrappedReadCallback.onReadFailed()
+      return
+    }
+
+    this.readCallback = wrappedReadCallback
+    if (!server.readCharacteristic(txCharacteristic)) {
+      Log.w(TAG, "Read failed.")
+      this.readCallback = null
+      wrappedReadCallback.onReadFailed()
+      return
+    }
   }
 
   /** Called when close()ing or when BT disabled. */
@@ -270,8 +411,12 @@ class ClientHelper(private val context: Context, val serverMacAddress: String) :
       it.onWriteFailed()
       writeCallback = null
     }
+    readCallback?.let {
+      it.onReadFailed()
+      writeCallback = null
+    }
     server = null
-    rxCharacteristic = null
+    characteristics = null
   }
 
   private fun startScanning() {

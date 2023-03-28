@@ -4,11 +4,20 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.bluetooth.BluetoothGattCharacteristic
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import androidx.annotation.IdRes
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+import sh.eliza.monocleimage.MonocleImage
+import sh.eliza.monocleimage.SerializedMonocleImage
+import sh.eliza.monocleimage.SerializedMonocleImageSender
+import sh.eliza.monocleimageprototype.Constants.MTU
 import sh.eliza.monocleimageprototype.Constants.SERVER_MAC_ADDRESS_KEY
 
 private const val TAG = "ClientService"
@@ -23,20 +32,24 @@ class ClientService : Service() {
   private var wakeLock: PowerManager.WakeLock? = null
   private var clientHelper: ClientHelper? = null
 
+  private val imageSenderLock = ReentrantLock()
+  private var imageSender: SerializedMonocleImageSender? = null
+
   override fun onCreate() {
     super.onCreate()
+
+    val volumeUpImage = getMonocleImageResource(R.drawable.blackandwhite)
+    val volumeDownImage = getMonocleImageResource(R.drawable.color)
 
     powerManager = getSystemService(POWER_SERVICE) as PowerManager
     volumeKeyHelper =
       VolumeKeyHelper(this) {
-        clientHelper?.write(
-          "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do ei".toByteArray(),
-          handler,
-          object : ClientHelper.WriteCallback {
-            override fun onWriteResult() {}
-            override fun onWriteFailed() {}
+        val image =
+          when (it) {
+            VolumeKeyHelper.Event.UP -> volumeUpImage
+            VolumeKeyHelper.Event.DOWN -> volumeDownImage
           }
-        )
+        startSendingImage(image)
       }
 
     val notificationManager =
@@ -75,7 +88,7 @@ class ClientService : Service() {
     if (clientHelper?.serverMacAddress != serverMacAddress) {
       clientHelper?.close()
       Log.i(TAG, "Starting service for server device name `$serverMacAddress'")
-      clientHelper = ClientHelper(this, serverMacAddress)
+      clientHelper = ClientHelper(this, MTU, serverMacAddress)
     }
 
     return START_STICKY
@@ -88,5 +101,88 @@ class ClientService : Service() {
     clientHelper?.close()
     wakeLock?.release()
     super.onDestroy()
+  }
+
+  private fun startSendingImage(image: MonocleImage) {
+    val payload =
+      imageSenderLock.withLock {
+        if (imageSender !== null) {
+          return
+        }
+        val sender =
+          SerializedMonocleImageSender(SerializedMonocleImage.createFromMonocleImage(image, MTU))
+        imageSender = sender
+        sender.next()
+      }
+    writePayload(payload)
+  }
+
+  private fun writePayload(payload: SerializedMonocleImageSender.Payload) {
+    Log.i(TAG, "writePayload(payload.kind = ${payload.kind})")
+    val clientHelper = clientHelper
+    check(clientHelper !== null)
+    clientHelper!!
+
+    when (payload.kind) {
+      SerializedMonocleImageSender.PayloadKind.NEW_IMAGE,
+      SerializedMonocleImageSender.PayloadKind.DATA ->
+        clientHelper.write(
+          payload.data.toByteArray(),
+          when (payload.kind) {
+            SerializedMonocleImageSender.PayloadKind.NEW_IMAGE ->
+              BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            SerializedMonocleImageSender.PayloadKind.DATA ->
+              BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            else -> throw IllegalStateException()
+          },
+          object : ClientHelper.WriteCallback {
+            override fun onWriteResult() {
+              val nextPayload = imageSenderLock.withLock { imageSender!!.next() }
+              writePayload(nextPayload)
+            }
+
+            override fun onWriteFailed() {
+              Log.i(TAG, "onWriteFailed()")
+              imageSender = null
+            }
+          }
+        )
+      SerializedMonocleImageSender.PayloadKind.CONFIRMATION -> {
+        clientHelper.read(
+          object : ClientHelper.ReadCallback {
+            override fun onReadResult(data: ByteArray) {
+              Log.i(TAG, "onReadResult()")
+              imageSenderLock
+                .withLock {
+                  val imageSender = imageSender!!
+                  imageSender.onConfirmationResponse(data)
+                  if (imageSender.isDone) {
+                    this@ClientService.imageSender = null
+                    null
+                  } else {
+                    imageSender.next()
+                  }
+                }
+                ?.let { writePayload(it) }
+            }
+
+            override fun onReadFailed() {
+              Log.i(TAG, "onReadFailed()")
+              imageSender = null
+            }
+          }
+        )
+      }
+    }
+  }
+
+  private fun getMonocleImageResource(@IdRes id: Int): MonocleImage {
+    val bitmap =
+      BitmapFactory.decodeResource(
+        resources,
+        id,
+        BitmapFactory.Options().apply { inScaled = false }
+      )
+    return MonocleImage.createFromRgb { row, col -> bitmap.getPixel(col, row) }
   }
 }

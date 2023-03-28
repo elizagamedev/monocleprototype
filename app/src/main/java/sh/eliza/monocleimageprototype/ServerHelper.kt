@@ -17,26 +17,46 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Handler
 import android.os.ParcelUuid
 import android.util.Log
-import java.io.ByteArrayOutputStream
 import sh.eliza.monocleimageprototype.Constants.SERVICE_RX_CHARACTERISTIC_UUID
+import sh.eliza.monocleimageprototype.Constants.SERVICE_TX_CHARACTERISTIC_UUID
 import sh.eliza.monocleimageprototype.Constants.SERVICE_UUID
 
 private const val TAG = "ServerHelper"
 
+private class WrappedCallbacks(
+  private val onWriteFun: (data: ByteArray, isResponseNeeded: Boolean) -> Unit,
+  private val onReadFun: () -> ByteArray,
+) {
+  fun onWrite(data: ByteArray, isResponseNeeded: Boolean) {
+    try {
+      onWriteFun(data, isResponseNeeded)
+    } catch (t: Throwable) {
+      Log.i(TAG, "Unhandled exception in `onWrite'.", t)
+    }
+  }
+
+  fun onRead() =
+    try {
+      onReadFun()
+    } catch (t: Throwable) {
+      Log.i(TAG, "Unhandled exception in `onRead'.", t)
+      byteArrayOf()
+    }
+}
+
 class ServerHelper(
   private val context: Context,
-  private val callbackHandler: Handler,
-  private val onReceive: (ByteArray) -> Unit
+  onWrite: (data: ByteArray, isResponseNeeded: Boolean) -> Unit,
+  onRead: () -> ByteArray,
 ) : AutoCloseable {
+  private val callbacks = WrappedCallbacks(onWrite, onRead)
+
   private val bluetoothManager =
     context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
   private val bluetoothAdapter = bluetoothManager.adapter
   private val bluetoothLeAdvertiser = bluetoothAdapter.bluetoothLeAdvertiser
-
-  private val rxBuffer = ByteArrayOutputStream()
 
   private var bluetoothGattServer: BluetoothGattServer? = null
   private var connectedDevice: BluetoothDevice? = null
@@ -46,8 +66,16 @@ class ServerHelper(
       addCharacteristic(
         BluetoothGattCharacteristic(
           SERVICE_RX_CHARACTERISTIC_UUID,
-          BluetoothGattCharacteristic.PROPERTY_WRITE,
+          BluetoothGattCharacteristic.PROPERTY_WRITE or
+            BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
           BluetoothGattCharacteristic.PERMISSION_WRITE
+        )
+      )
+      addCharacteristic(
+        BluetoothGattCharacteristic(
+          SERVICE_TX_CHARACTERISTIC_UUID,
+          BluetoothGattCharacteristic.PROPERTY_READ,
+          BluetoothGattCharacteristic.PERMISSION_READ
         )
       )
     }
@@ -95,14 +123,12 @@ class ServerHelper(
               Log.i(TAG, "Connected. device=$device")
               connectedDevice?.let { bluetoothGattServer?.cancelConnection(device) }
               connectedDevice = device
-              rxBuffer.reset()
               stopAdvertising()
             }
             BluetoothProfile.STATE_DISCONNECTED -> {
               Log.i(TAG, "Disconnected. device=$device")
               if (device == connectedDevice) {
                 connectedDevice = null
-                rxBuffer.reset()
                 startAdvertising()
               }
             }
@@ -114,15 +140,44 @@ class ServerHelper(
         }
       }
 
+      override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
+        try {
+          Log.i(TAG, "MTU changed. mtu=$mtu")
+        } catch (t: Throwable) {
+          Log.e(TAG, "Unhandled exception during `onMtuChanged'", t)
+          stopAdvertising()
+          stopServer()
+        }
+      }
+
       override fun onCharacteristicReadRequest(
         device: BluetoothDevice,
         requestId: Int,
         offset: Int,
-        characteristic: BluetoothGattCharacteristic
+        characteristic: BluetoothGattCharacteristic,
       ) {
         try {
-          Log.w(TAG, "Unknown characteristic read request.")
-          bluetoothGattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+          when (characteristic.uuid) {
+            SERVICE_TX_CHARACTERISTIC_UUID -> {
+              bluetoothGattServer?.sendResponse(
+                device,
+                requestId,
+                BluetoothGatt.GATT_SUCCESS,
+                /*offset=*/ 0,
+                callbacks.onRead(),
+              )
+            }
+            else -> {
+              Log.w(TAG, "Unknown characteristic read request.")
+              bluetoothGattServer?.sendResponse(
+                device,
+                requestId,
+                BluetoothGatt.GATT_FAILURE,
+                0,
+                null
+              )
+            }
+          }
         } catch (t: Throwable) {
           Log.e(TAG, "Unhandled exception during `onCharacteristicReadRequest'", t)
           stopAdvertising()
@@ -159,21 +214,16 @@ class ServerHelper(
           when (characteristic.uuid) {
             SERVICE_RX_CHARACTERISTIC_UUID -> {
               if (preparedWrite) {
-                Log.i(TAG, "Prepared protocol write request.")
-                if (offset != rxBuffer.size()) {
-                  Log.w(TAG, "offset ($offset) != size (${rxBuffer.size()})")
-                }
-                rxBuffer.write(value)
+                Log.w(TAG, "Unhandled prepared write request.")
               } else {
-                Log.i(TAG, "Protocol write request.")
-                callbackHandler.post { onReceive(value) }
+                callbacks.onWrite(value, responseNeeded)
               }
               if (responseNeeded) {
                 bluetoothGattServer?.sendResponse(
                   device,
                   requestId,
                   BluetoothGatt.GATT_SUCCESS,
-                  0,
+                  /*offset=*/ 0,
                   value
                 )
               }
@@ -220,23 +270,6 @@ class ServerHelper(
           }
         } catch (t: Throwable) {
           Log.e(TAG, "Unhandled exception during `onDescriptorWriteRequest'", t)
-          stopAdvertising()
-          stopServer()
-        }
-      }
-
-      override fun onExecuteWrite(device: BluetoothDevice, requestId: Int, execute: Boolean) {
-        try {
-          if (execute) {
-            Log.i(TAG, "Executing write.")
-            callbackHandler.post { onReceive(rxBuffer.toByteArray()) }
-          } else {
-            Log.i(TAG, "Canceling write.")
-          }
-          rxBuffer.reset()
-          bluetoothGattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
-        } catch (t: Throwable) {
-          Log.e(TAG, "Unhandled exception during `onExecuteWrite'", t)
           stopAdvertising()
           stopServer()
         }
@@ -307,6 +340,5 @@ class ServerHelper(
     Log.i(TAG, "Stopping server...")
     bluetoothGattServer?.close()
     bluetoothGattServer = null
-    rxBuffer.reset()
   }
 }
